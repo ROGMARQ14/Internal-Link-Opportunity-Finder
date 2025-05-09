@@ -96,13 +96,13 @@ def clean_link_dataset(df):
 
     # 9. Remove paginated pages from both files
     def is_valid_page(url):
-    if pd.isna(url):
-        return False
-    invalid_patterns = [
-        'category/', 'tag/', 'sitemap', 'search', '/home/', 'index',
-        '/page/'  # Add this to filter out paginated URLs
-    ]
-    return not any(pattern in str(url).lower() for pattern in invalid_patterns)
+        if pd.isna(url):
+            return False
+        invalid_patterns = [
+            'category/', 'tag/', 'sitemap', 'search', '/home/', 'index',
+            '/page/'  # Add this to filter out paginated URLs
+        ]
+        return not any(pattern in str(url).lower() for pattern in invalid_patterns)
     
     # Clean up and standardize columns
     if 'Link Position' in df.columns:
