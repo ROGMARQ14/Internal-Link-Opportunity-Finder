@@ -68,7 +68,7 @@ def clean_link_dataset(df):
         if pd.isna(url):
             return False
         invalid_patterns = [
-            'category/', 'tag/', 'sitemap', 'search', '/home/', 'index'
+            'category/', 'tag/', 'sitemap', 'search', '/home/', 'index', '/page/'
         ]
         return not any(pattern in str(url).lower() for pattern in invalid_patterns)
 
@@ -86,17 +86,7 @@ def clean_link_dataset(df):
         df = df.sort_values('Alt Text', ascending=False)
         df.loc[df['Alt Text'].notna(), 'Anchor'] = df['Alt Text']
         df = df.drop('Alt Text', axis=1)
-
-    # 8. Handle self-linking URLs
-    def is_valid_page(url):
-        if pd.isna(url):
-            return False
-        invalid_patterns = [
-            'category/', 'tag/', 'sitemap', 'search', '/home/', 'index',
-        '    /page/'  # Add this to filter out paginated URLs
-        ]
-        return not any(pattern in str(url).lower() for pattern in invalid_patterns)
-    
+      
     # Clean up and standardize columns
     if 'Link Position' in df.columns:
         df = df.drop('Link Position', axis=1)
