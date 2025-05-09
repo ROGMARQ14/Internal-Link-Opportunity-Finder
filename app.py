@@ -167,6 +167,19 @@ def clean_embeddings_data(df):
     if cols_to_drop:
         df = df.drop(cols_to_drop, axis=1)
 
+    # Add pagination filtering for URLs
+    def is_valid_url(url):
+        if pd.isna(url):
+            return False
+        invalid_patterns = [
+            'category/', 'tag/', 'sitemap', 'search', '/home/', 'index', '/page/'
+        ]
+        return not any(pattern in str(url).lower() for pattern in invalid_patterns)
+
+# Apply the filtering to the URL column
+df = df[df[url_col].apply(is_valid_url)]
+st.write("Shape after filtering paginated URLs:", df.shape)
+
     cleaned_df = pd.DataFrame()
     cleaned_df['URL'] = df[url_col]
     cleaned_df['Embeddings'] = df[embeddings_col]
