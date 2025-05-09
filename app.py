@@ -178,7 +178,7 @@ def clean_embeddings_data(df):
 
 # Apply the filtering to the URL column
 df = df[df[url_col].apply(is_valid_url)]
-st.write("Shape after filtering paginated URLs:", df.shape)
+    st.write("Shape after filtering paginated URLs:", df.shape)
 
     cleaned_df = pd.DataFrame()
     cleaned_df['URL'] = df[url_col]
