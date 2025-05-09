@@ -88,21 +88,19 @@ def clean_link_dataset(df):
         df = df.drop('Alt Text', axis=1)
 
     # 8. Handle self-linking URLs
-    df['links to self'] = np.where(df[source_col] == df[dest_col], 'Match', 'No Match')
-    df = df.sort_values('links to self')
-    df = df[df['links to self'] != 'Match']
-    df = df.drop('links to self', axis=1)
-    st.write("Shape after removing self-links:", df.shape)
-
-    # 9. Remove paginated pages from both files
-    def is_valid_page(url):
-        if pd.isna(url):
-            return False
-        invalid_patterns = [
-            'category/', 'tag/', 'sitemap', 'search', '/home/', 'index',
-            '/page/'  # Add this to filter out paginated URLs
-        ]
-        return not any(pattern in str(url).lower() for pattern in invalid_patterns)
+    if url_col:
+        # Filter out paginated URLs
+        def is_valid_url(url):
+            if pd.isna(url):
+                return False
+            # Check for pagination pattern
+            import re
+            if re.search(r'/page/\d+/?', str(url).lower()):
+                return False
+        return True
+    
+        df = df[df[url_col].apply(is_valid_url)]
+        st.write("Shape after removing paginated URLs:", df.shape)
     
     # Clean up and standardize columns
     if 'Link Position' in df.columns:
