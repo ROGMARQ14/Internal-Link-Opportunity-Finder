@@ -1,4 +1,4 @@
-# Internal-Link-Opportunities# Internal Link Opportunity Finder
+# Internal Link Opportunity Finder
 
 A Streamlit app to discover internal linking opportunities for your website using vector embeddings.
 
