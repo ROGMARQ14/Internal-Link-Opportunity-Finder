@@ -3,3 +3,4 @@ pandas
 numpy
 scikit-learn
 openpyxl
+chardet  # Add this for encoding detection
