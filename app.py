@@ -1,4 +1,4 @@
-import streamlit as st
+streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -322,7 +322,7 @@ with tab1:
     
     if embeddings_file is not None:
         try:
-            df_embeddings_raw = pd.read_csv(embeddings_file)
+            df_embeddings_raw = pd.read_csv(embeddings_file, on_bad_lines='skip', engine='python')
             st.success(f"Successfully loaded embeddings file with {df_embeddings_raw.shape[0]} rows and {df_embeddings_raw.shape[1]} columns")
             st.write("First few rows of the data:")
             st.dataframe(df_embeddings_raw.head())
