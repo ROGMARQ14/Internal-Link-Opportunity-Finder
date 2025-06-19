@@ -303,7 +303,7 @@ with tab1:
     
     if link_file is not None:
         try:
-            df_links = pd.read_csv(link_file)
+            df_links = pd.read_csv(link_file, on_bad_lines='skip', engine='python')
             st.success(f"Successfully loaded links file with {df_links.shape[0]} rows and {df_links.shape[1]} columns")
             st.write("First few rows of the data:")
             st.dataframe(df_links.head())
