@@ -7,6 +7,19 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Alignment
 
+def read_large_csv_safely(uploaded_file, chunk_size=10000):
+    """Safely read large CSV files in chunks with error handling."""
+    chunks = []
+    try:
+        uploaded_file.seek(0)  # Reset file pointer
+        for chunk in pd.read_csv(uploaded_file, chunksize=chunk_size, 
+                                on_bad_lines='skip', engine='python'):
+            chunks.append(chunk)
+        return pd.concat(chunks, ignore_index=True)
+    except Exception as e:
+        st.error(f"Error processing chunks: {str(e)}")
+        return None
+
 st.set_page_config(
     page_title="Internal Link Opportunity Finder",
     page_icon="🔗",
@@ -321,21 +334,24 @@ with tab1:
     embeddings_file = st.file_uploader("Choose an embeddings CSV file", type=['csv'], key="embeddings_file")
     
     if embeddings_file is not None:
-        try:
+    try:
+        # Check file size (in bytes)
+        file_size = len(embeddings_file.getvalue())
+        st.info(f"File size: {file_size / (1024*1024):.2f} MB")
+        
+        if file_size > 50 * 1024 * 1024:  # If file is larger than 50MB
+            st.info("Large file detected. Using chunked reading...")
+            df_embeddings_raw = read_large_csv_safely(embeddings_file)
+        else:
             df_embeddings_raw = pd.read_csv(embeddings_file, on_bad_lines='skip', engine='python')
+        
+        if df_embeddings_raw is not None:
             st.success(f"Successfully loaded embeddings file with {df_embeddings_raw.shape[0]} rows and {df_embeddings_raw.shape[1]} columns")
             st.write("First few rows of the data:")
             st.dataframe(df_embeddings_raw.head())
+        else:
+            st.error("Failed to load the file. Please check the file format.")
             
-            if st.button("Clean Embeddings Data"):
-                with st.spinner("Cleaning embeddings data..."):
-                    st.session_state.df_embeddings = clean_embeddings_data(df_embeddings_raw)
-                if st.session_state.df_embeddings is not None:
-                    st.success("Embeddings data cleaned successfully!")
-                    st.dataframe(st.session_state.df_embeddings.head())
-        except Exception as e:
-            st.error(f"Error loading the file: {str(e)}")
-
 with tab2:
     st.header("Step 2: Process the Data")
     
