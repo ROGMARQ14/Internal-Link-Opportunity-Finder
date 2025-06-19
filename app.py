@@ -3,21 +3,192 @@ import pandas as pd
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import base64
-from io import BytesIO
+from io import BytesIO, StringIO
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Alignment
+import csv
+
+def detect_csv_delimiter(file_content, sample_size=1024):
+    """
+    Detect the delimiter in a CSV file using multiple methods.
+    Returns the detected delimiter.
+    """
+    # Convert bytes to string if needed
+    if isinstance(file_content, bytes):
+        try:
+            file_content = file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                file_content = file_content.decode('latin1')
+            except:
+                file_content = file_content.decode('utf-8', errors='ignore')
+    
+    # Method 1: Try csv.Sniffer
+    try:
+        sample = file_content[:sample_size]
+        sniffer = csv.Sniffer()
+        delimiter = sniffer.sniff(sample, delimiters=',;\t|').delimiter
+        st.info(f"Detected delimiter: '{delimiter}'")
+        return delimiter
+    except Exception as e:
+        st.warning(f"CSV Sniffer failed: {str(e)}")
+    
+    # Method 2: Manual detection by counting common delimiters
+    sample = file_content[:sample_size]
+    lines = sample.split('\n')[:5]  # Check first 5 lines
+    
+    delimiters = [';', ',', '\t', '|']
+    delimiter_counts = {}
+    
+    for delimiter in delimiters:
+        counts = []
+        for line in lines:
+            if line.strip():  # Skip empty lines
+                counts.append(line.count(delimiter))
+        
+        # Check if delimiter appears consistently across lines
+        if counts and len(set(counts)) <= 2:  # Allow some variation
+            delimiter_counts[delimiter] = sum(counts) / len(counts)  # Average count
+    
+    if delimiter_counts:
+        # Return the delimiter with highest consistent count
+        best_delimiter = max(delimiter_counts, key=delimiter_counts.get)
+        st.info(f"Detected delimiter: '{best_delimiter}'")
+        return best_delimiter
+    
+    # Default fallback
+    st.warning("No delimiter detected, defaulting to comma")
+    return ','
 
 def read_large_csv_safely(uploaded_file, chunk_size=10000):
-    """Safely read large CSV files in chunks with error handling."""
-    chunks = []
+    """
+    Safely read large CSV files in chunks with error handling and automatic delimiter detection.
+    """
     try:
-        uploaded_file.seek(0)  # Reset file pointer
-        for chunk in pd.read_csv(uploaded_file, chunksize=chunk_size, 
-                                on_bad_lines='skip', engine='python'):
+        # Reset file pointer
+        uploaded_file.seek(0)
+        
+        # Read a sample to detect delimiter
+        file_content = uploaded_file.read(10240)  # Read 10KB for detection
+        uploaded_file.seek(0)  # Reset again
+        
+        # Detect delimiter
+        if isinstance(file_content, bytes):
+            sample_content = file_content
+        else:
+            sample_content = file_content.encode()
+            
+        detected_delimiter = detect_csv_delimiter(sample_content)
+        
+        # Read in chunks
+        chunks = []
+        for chunk in pd.read_csv(
+            uploaded_file, 
+            chunksize=chunk_size,
+            sep=detected_delimiter,
+            on_bad_lines='skip',
+            engine='python',
+            encoding_errors='ignore'
+        ):
             chunks.append(chunk)
+        
+        if not chunks:
+            st.error("No data could be read from the file.")
+            return None
+            
         return pd.concat(chunks, ignore_index=True)
     except Exception as e:
         st.error(f"Error processing chunks: {str(e)}")
+        # Try alternative methods if chunked reading fails
+        try:
+            uploaded_file.seek(0)
+            return pd.read_csv(uploaded_file, sep=None, on_bad_lines='skip', engine='python')
+        except Exception as e2:
+            st.error(f"Alternative reading method failed: {str(e2)}")
+            return None
+
+def read_csv_with_auto_delimiter(uploaded_file):
+    """
+    Read CSV file with automatic delimiter detection and error handling.
+    Tries multiple methods to ensure the file is read correctly.
+    """
+    try:
+        # Reset file pointer
+        uploaded_file.seek(0)
+        file_content = uploaded_file.read()
+        file_size = len(file_content)
+        uploaded_file.seek(0)  # Reset again
+        
+        # Check file size
+        st.info(f"File size: {file_size / (1024*1024):.2f} MB")
+        
+        # For large files, use chunked reading
+        if file_size > 50 * 1024 * 1024:  # 50MB threshold
+            st.info("Large file detected. Using chunked reading...")
+            return read_large_csv_safely(uploaded_file)
+        
+        # For smaller files, try multiple methods
+        
+        # First, detect delimiter
+        if isinstance(file_content, bytes):
+            sample_content = file_content
+        else:
+            sample_content = file_content.encode()
+            
+        detected_delimiter = detect_csv_delimiter(sample_content)
+        
+        # Try multiple reading methods
+        methods = [
+            # Method 1: Use detected delimiter
+            {"name": "Detected delimiter", "func": lambda: pd.read_csv(
+                uploaded_file, sep=detected_delimiter, on_bad_lines='skip', engine='python')},
+            # Method 2: Use pandas automatic detection
+            {"name": "Pandas auto-detection", "func": lambda: pd.read_csv(
+                uploaded_file, sep=None, on_bad_lines='skip', engine='python')},
+            # Method 3: Try semicolon explicitly
+            {"name": "Semicolon delimiter", "func": lambda: pd.read_csv(
+                uploaded_file, sep=";", on_bad_lines='skip', engine='python')},
+            # Method 4: Try comma explicitly
+            {"name": "Comma delimiter", "func": lambda: pd.read_csv(
+                uploaded_file, sep=",", on_bad_lines='skip', engine='python')},
+        ]
+        
+        for method in methods:
+            try:
+                uploaded_file.seek(0)
+                df = method["func"]()
+                st.success(f"Successfully read CSV using {method['name']}")
+                
+                # Verify the data looks reasonable
+                if len(df.columns) <= 1:
+                    st.warning(f"Only {len(df.columns)} column detected. This may indicate an incorrect delimiter.")
+                    continue
+                    
+                return df
+            except Exception as e:
+                st.warning(f"{method['name']} failed: {str(e)}")
+                continue
+        
+        # If all methods fail, try a last resort with very permissive settings
+        try:
+            uploaded_file.seek(0)
+            st.warning("Trying last resort parsing method...")
+            df = pd.read_csv(
+                uploaded_file, 
+                sep=None,
+                engine='python',
+                on_bad_lines='skip',
+                encoding_errors='ignore',
+                quoting=csv.QUOTE_NONE
+            )
+            st.success("Successfully read CSV using last resort method")
+            return df
+        except Exception as e:
+            st.error(f"All CSV reading methods failed. Last error: {str(e)}")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error reading CSV: {str(e)}")
         return None
 
 st.set_page_config(
@@ -315,15 +486,8 @@ with tab1:
     
     if link_file is not None:
         try:
-            # Check file size (in bytes)
-            file_size = len(link_file.getvalue())
-            st.info(f"File size: {file_size / (1024*1024):.2f} MB")
-            
-            if file_size > 50 * 1024 * 1024:  # If file is larger than 50MB
-                st.info("Large file detected. Using chunked reading...")
-                df_links = read_large_csv_safely(link_file)
-            else:
-                df_links = pd.read_csv(link_file, on_bad_lines='skip', engine='python')
+            # Use our new robust CSV reader
+            df_links = read_csv_with_auto_delimiter(link_file)
             
             if df_links is not None:
                 st.success(f"Successfully loaded links file with {df_links.shape[0]} rows and {df_links.shape[1]} columns")
@@ -346,15 +510,8 @@ with tab1:
     
     if embeddings_file is not None:
         try:
-            # Check file size (in bytes)
-            file_size = len(embeddings_file.getvalue())
-            st.info(f"File size: {file_size / (1024*1024):.2f} MB")
-            
-            if file_size > 50 * 1024 * 1024:  # If file is larger than 50MB
-                st.info("Large file detected. Using chunked reading...")
-                df_embeddings_raw = read_large_csv_safely(embeddings_file)
-            else:
-                df_embeddings_raw = pd.read_csv(embeddings_file, on_bad_lines='skip', engine='python')
+            # Use our new robust CSV reader
+            df_embeddings_raw = read_csv_with_auto_delimiter(embeddings_file)
             
             if df_embeddings_raw is not None:
                 st.success(f"Successfully loaded embeddings file with {df_embeddings_raw.shape[0]} rows and {df_embeddings_raw.shape[1]} columns")
