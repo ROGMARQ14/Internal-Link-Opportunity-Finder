@@ -113,7 +113,6 @@ def clean_link_dataset(df):
     final_columns = ['Source', 'Destination', 'Anchor']
     other_columns = [col for col in df.columns if col not in final_columns]
     df = df[final_columns + other_columns]
-
     return df
 
 # ----------- PART 2: EMBEDDINGS PREPROCESSING -----------
@@ -316,16 +315,28 @@ with tab1:
     
     if link_file is not None:
         try:
-            df_links = pd.read_csv(link_file, on_bad_lines='skip', engine='python')
-            st.success(f"Successfully loaded links file with {df_links.shape[0]} rows and {df_links.shape[1]} columns")
-            st.write("First few rows of the data:")
-            st.dataframe(df_links.head())
+            # Check file size (in bytes)
+            file_size = len(link_file.getvalue())
+            st.info(f"File size: {file_size / (1024*1024):.2f} MB")
             
-            if st.button("Clean Links Data"):
-                with st.spinner("Cleaning links data..."):
-                    st.session_state.df_cleaned_links = clean_link_dataset(df_links)
-                st.success("Links data cleaned successfully!")
-                st.dataframe(st.session_state.df_cleaned_links.head())
+            if file_size > 50 * 1024 * 1024:  # If file is larger than 50MB
+                st.info("Large file detected. Using chunked reading...")
+                df_links = read_large_csv_safely(link_file)
+            else:
+                df_links = pd.read_csv(link_file, on_bad_lines='skip', engine='python')
+            
+            if df_links is not None:
+                st.success(f"Successfully loaded links file with {df_links.shape[0]} rows and {df_links.shape[1]} columns")
+                st.write("First few rows of the data:")
+                st.dataframe(df_links.head())
+                
+                if st.button("Clean Links Data"):
+                    with st.spinner("Cleaning links data..."):
+                        st.session_state.df_cleaned_links = clean_link_dataset(df_links)
+                    st.success("Links data cleaned successfully!")
+                    st.dataframe(st.session_state.df_cleaned_links.head())
+            else:
+                st.error("Failed to load the file. Please check the file format.")
         except Exception as e:
             st.error(f"Error loading the file: {str(e)}")
     
@@ -334,24 +345,33 @@ with tab1:
     embeddings_file = st.file_uploader("Choose an embeddings CSV file", type=['csv'], key="embeddings_file")
     
     if embeddings_file is not None:
-    try:
-        # Check file size (in bytes)
-        file_size = len(embeddings_file.getvalue())
-        st.info(f"File size: {file_size / (1024*1024):.2f} MB")
-        
-        if file_size > 50 * 1024 * 1024:  # If file is larger than 50MB
-            st.info("Large file detected. Using chunked reading...")
-            df_embeddings_raw = read_large_csv_safely(embeddings_file)
-        else:
-            df_embeddings_raw = pd.read_csv(embeddings_file, on_bad_lines='skip', engine='python')
-        
-        if df_embeddings_raw is not None:
-            st.success(f"Successfully loaded embeddings file with {df_embeddings_raw.shape[0]} rows and {df_embeddings_raw.shape[1]} columns")
-            st.write("First few rows of the data:")
-            st.dataframe(df_embeddings_raw.head())
-        else:
-            st.error("Failed to load the file. Please check the file format.")
+        try:
+            # Check file size (in bytes)
+            file_size = len(embeddings_file.getvalue())
+            st.info(f"File size: {file_size / (1024*1024):.2f} MB")
             
+            if file_size > 50 * 1024 * 1024:  # If file is larger than 50MB
+                st.info("Large file detected. Using chunked reading...")
+                df_embeddings_raw = read_large_csv_safely(embeddings_file)
+            else:
+                df_embeddings_raw = pd.read_csv(embeddings_file, on_bad_lines='skip', engine='python')
+            
+            if df_embeddings_raw is not None:
+                st.success(f"Successfully loaded embeddings file with {df_embeddings_raw.shape[0]} rows and {df_embeddings_raw.shape[1]} columns")
+                st.write("First few rows of the data:")
+                st.dataframe(df_embeddings_raw.head())
+                
+                if st.button("Clean Embeddings Data"):
+                    with st.spinner("Cleaning embeddings data..."):
+                        st.session_state.df_embeddings = clean_embeddings_data(df_embeddings_raw)
+                    if st.session_state.df_embeddings is not None:
+                        st.success("Embeddings data cleaned successfully!")
+                        st.dataframe(st.session_state.df_embeddings.head())
+            else:
+                st.error("Failed to load the file. Please check the file format.")
+        except Exception as e:
+            st.error(f"Error loading the embeddings file: {str(e)}")
+
 with tab2:
     st.header("Step 2: Process the Data")
     
