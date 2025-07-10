@@ -1,6 +1,0 @@
-[server]
-maxUploadSize = 1000  # Increase to 1GB
-maxMessageSize = 1000
-
-[browser]
-gatherUsageStats = false
