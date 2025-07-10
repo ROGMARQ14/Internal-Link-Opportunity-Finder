@@ -5,194 +5,210 @@ CSV handling utilities with robust delimiter detection and error handling.
 import csv
 import logging
 import pandas as pd
-import streamlit as st
 from io import StringIO
 from typing import Optional, List, Dict, Any
+from pathlib import Path
+
 from config import (
-    CHUNK_SIZE, SAMPLE_SIZE_DELIMITER_DETECTION, 
-    LARGE_FILE_THRESHOLD_MB, CSV_DELIMITERS
+    MAX_FILE_SIZE_MB, CHUNK_SIZE, SAMPLE_SIZE_DELIMITER_DETECTION,
+    LARGE_FILE_THRESHOLD_MB, CSV_DELIMITERS, LOG_LEVEL
 )
 
+# Configure logging
+logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 class CSVHandler:
-    """Handles CSV file reading with automatic delimiter detection and error handling."""
-
+    """Production-grade CSV handler with automatic delimiter detection and error handling."""
+    
     def __init__(self):
-        self.delimiters = CSV_DELIMITERS
-
-    def detect_delimiter(self, file_content: bytes, sample_size: int = SAMPLE_SIZE_DELIMITER_DETECTION) -> str:
+        self.supported_delimiters = CSV_DELIMITERS
+        self.max_file_size = MAX_FILE_SIZE_MB * 1024 * 1024  # Convert to bytes
+        self.chunk_size = CHUNK_SIZE
+        self.sample_size = SAMPLE_SIZE_DELIMITER_DETECTION
+        self.large_file_threshold = LARGE_FILE_THRESHOLD_MB * 1024 * 1024
+        
+    def detect_delimiter(self, file_content: str) -> str:
         """
-        Detect the delimiter in a CSV file using multiple methods.
-
+        Detect CSV delimiter using multiple methods.
+        
         Args:
-            file_content: The file content as bytes
-            sample_size: Size of sample to analyze
-
+            file_content: String content of the CSV file
+            
         Returns:
-            Detected delimiter
+            Detected delimiter character
         """
-        # Convert bytes to string if needed
-        if isinstance(file_content, bytes):
-            try:
-                file_content = file_content.decode('utf-8')
-            except UnicodeDecodeError:
-                try:
-                    file_content = file_content.decode('latin1')
-                except:
-                    file_content = file_content.decode('utf-8', errors='ignore')
-
-        # Method 1: Try csv.Sniffer
         try:
-            sample = file_content[:sample_size]
+            # Method 1: CSV Sniffer
+            sample = file_content[:self.sample_size]
             sniffer = csv.Sniffer()
-            delimiter = sniffer.sniff(sample, delimiters=',;	|').delimiter
-            logger.info(f"Detected delimiter using csv.Sniffer: '{delimiter}'")
+            delimiter = sniffer.sniff(sample, delimiters=''.join(self.supported_delimiters)).delimiter
+            logger.info(f"Detected delimiter using CSV Sniffer: '{delimiter}'")
             return delimiter
+            
         except Exception as e:
-            logger.warning(f"CSV Sniffer failed: {str(e)}")
-
-        # Method 2: Manual detection by counting common delimiters
-        sample = file_content[:sample_size]
-        lines = sample.split('
-')[:5]  # Check first 5 lines
-        delimiter_counts = {}
-
-        for delimiter in self.delimiters:
-            counts = []
-            for line in lines:
-                if line.strip():  # Skip empty lines
-                    counts.append(line.count(delimiter))
-
-            # Check if delimiter appears consistently across lines
-            if counts and len(set(counts)) <= 2:  # Allow some variation
-                delimiter_counts[delimiter] = sum(counts) / len(counts)
-
-        if delimiter_counts:
-            best_delimiter = max(delimiter_counts, key=delimiter_counts.get)
+            logger.warning(f"CSV Sniffer failed: {e}")
+            
+        # Method 2: Manual detection by counting
+        sample = file_content[:self.sample_size]
+        lines = [line for line in sample.split('\n')[:5] if line.strip()]
+        
+        delimiter_scores = {}
+        for delimiter in self.supported_delimiters:
+            counts = [line.count(delimiter) for line in lines]
+            if counts and len(set(counts)) <= 2:  # Consistent counts
+                delimiter_scores[delimiter] = sum(counts) / len(counts)
+                
+        if delimiter_scores:
+            best_delimiter = max(delimiter_scores, key=delimiter_scores.get)
             logger.info(f"Detected delimiter using manual method: '{best_delimiter}'")
             return best_delimiter
-
-        # Default fallback
-        logger.warning("No delimiter detected, defaulting to comma")
+            
+        # Fallback
+        logger.warning("No delimiter detected, using comma as default")
         return ','
-
-    def read_large_csv_safely(self, uploaded_file, chunk_size: int = CHUNK_SIZE) -> Optional[pd.DataFrame]:
+    
+    def read_csv_chunked(self, file_path: Path, delimiter: str) -> Optional[pd.DataFrame]:
         """
-        Safely read large CSV files in chunks with error handling.
-
+        Read large CSV files in chunks.
+        
         Args:
-            uploaded_file: Streamlit uploaded file object
-            chunk_size: Size of chunks to read
-
+            file_path: Path to the CSV file
+            delimiter: Delimiter to use
+            
         Returns:
-            DataFrame or None if failed
+            Combined DataFrame or None if failed
         """
         try:
-            # Reset file pointer
-            uploaded_file.seek(0)
-
-            # Read a sample to detect delimiter
-            file_content = uploaded_file.read(10240)  # Read 10KB for detection
-            uploaded_file.seek(0)  # Reset again
-
-            detected_delimiter = self.detect_delimiter(file_content)
-
-            # Read in chunks
             chunks = []
+            chunk_count = 0
+            
             for chunk in pd.read_csv(
-                uploaded_file,
-                chunksize=chunk_size,
-                sep=detected_delimiter,
+                file_path,
+                chunksize=self.chunk_size,
+                sep=delimiter,
                 on_bad_lines='skip',
                 engine='python',
                 encoding_errors='ignore'
             ):
                 chunks.append(chunk)
-
-            if not chunks:
-                logger.error("No data could be read from the file")
-                return None
-
-            result = pd.concat(chunks, ignore_index=True)
-            logger.info(f"Successfully read large CSV with {len(result)} rows")
-            return result
-
-        except Exception as e:
-            logger.error(f"Error processing chunks: {str(e)}")
-
-            # Try alternative methods
-            try:
-                uploaded_file.seek(0)
-                result = pd.read_csv(uploaded_file, sep=None, on_bad_lines='skip', engine='python')
-                logger.info("Successfully read CSV using alternative method")
+                chunk_count += 1
+                logger.debug(f"Processed chunk {chunk_count}, rows: {len(chunk)}")
+                
+            if chunks:
+                result = pd.concat(chunks, ignore_index=True)
+                logger.info(f"Successfully read {len(result)} rows from {chunk_count} chunks")
                 return result
-            except Exception as e2:
-                logger.error(f"Alternative reading method failed: {str(e2)}")
+            else:
+                logger.error("No chunks were successfully read")
                 return None
-
+                
+        except Exception as e:
+            logger.error(f"Chunked reading failed: {e}")
+            return None
+    
     def read_csv_with_auto_delimiter(self, uploaded_file) -> Optional[pd.DataFrame]:
         """
-        Read CSV file with automatic delimiter detection and error handling.
-
+        Read CSV with automatic delimiter detection and error handling.
+        
         Args:
             uploaded_file: Streamlit uploaded file object
-
+            
         Returns:
             DataFrame or None if failed
         """
         try:
             # Reset file pointer
             uploaded_file.seek(0)
-            file_content = uploaded_file.read()
-            file_size = len(file_content)
-            uploaded_file.seek(0)  # Reset again
-
+            
+            # Read content for analysis
+            if hasattr(uploaded_file, 'read'):
+                file_content = uploaded_file.read()
+                file_size = len(file_content)
+                uploaded_file.seek(0)  # Reset again
+            else:
+                logger.error("Invalid file object")
+                return None
+                
+            # Check file size
+            if file_size > self.max_file_size:
+                logger.error(f"File too large: {file_size / (1024*1024):.2f} MB > {MAX_FILE_SIZE_MB} MB")
+                return None
+                
             logger.info(f"Processing file of size: {file_size / (1024*1024):.2f} MB")
-
+            
+            # Convert bytes to string if needed
+            if isinstance(file_content, bytes):
+                try:
+                    file_content_str = file_content.decode('utf-8')
+                except UnicodeDecodeError:
+                    try:
+                        file_content_str = file_content.decode('latin1')
+                    except UnicodeDecodeError:
+                        file_content_str = file_content.decode('utf-8', errors='ignore')
+                        logger.warning("Used error-ignore decoding due to encoding issues")
+            else:
+                file_content_str = file_content
+                
+            # Detect delimiter
+            delimiter = self.detect_delimiter(file_content_str)
+            
             # For large files, use chunked reading
-            if file_size > LARGE_FILE_THRESHOLD_MB * 1024 * 1024:
-                logger.info("Large file detected. Using chunked reading...")
-                return self.read_large_csv_safely(uploaded_file)
-
+            if file_size > self.large_file_threshold:
+                logger.info("Large file detected, using chunked reading")
+                # Save to temp file for chunked reading
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as tmp:
+                    tmp.write(file_content_str)
+                    tmp_path = Path(tmp.name)
+                
+                try:
+                    result = self.read_csv_chunked(tmp_path, delimiter)
+                    return result
+                finally:
+                    tmp_path.unlink()  # Clean up temp file
+            
             # For smaller files, try multiple methods
-            detected_delimiter = self.detect_delimiter(file_content)
-
-            # Try multiple reading methods
             methods = [
-                {"name": "Detected delimiter", "sep": detected_delimiter},
-                {"name": "Pandas auto-detection", "sep": None},
-                {"name": "Semicolon delimiter", "sep": ";"},
-                {"name": "Comma delimiter", "sep": ","},
+                {
+                    "name": "Detected delimiter",
+                    "params": {"sep": delimiter, "on_bad_lines": 'skip', "engine": 'python'}
+                },
+                {
+                    "name": "Pandas auto-detection", 
+                    "params": {"sep": None, "on_bad_lines": 'skip', "engine": 'python'}
+                },
+                {
+                    "name": "Semicolon fallback",
+                    "params": {"sep": ";", "on_bad_lines": 'skip', "engine": 'python'}
+                },
+                {
+                    "name": "Comma fallback",
+                    "params": {"sep": ",", "on_bad_lines": 'skip', "engine": 'python'}
+                }
             ]
-
+            
             for method in methods:
                 try:
                     uploaded_file.seek(0)
-                    df = pd.read_csv(
-                        uploaded_file,
-                        sep=method["sep"],
-                        on_bad_lines='skip',
-                        engine='python'
-                    )
-
-                    logger.info(f"Successfully read CSV using {method['name']}")
-
-                    # Verify the data looks reasonable
+                    df = pd.read_csv(uploaded_file, **method["params"])
+                    
+                    # Validate result
                     if len(df.columns) <= 1:
-                        logger.warning(f"Only {len(df.columns)} column detected with {method['name']}")
+                        logger.warning(f"{method['name']}: Only {len(df.columns)} column(s) detected")
                         continue
-
+                        
+                    logger.info(f"Successfully read CSV using {method['name']}")
+                    logger.info(f"Shape: {df.shape}, Columns: {list(df.columns)}")
                     return df
-
+                    
                 except Exception as e:
-                    logger.warning(f"{method['name']} failed: {str(e)}")
+                    logger.warning(f"{method['name']} failed: {e}")
                     continue
-
+            
             # Last resort with very permissive settings
             try:
                 uploaded_file.seek(0)
-                logger.warning("Trying last resort parsing method...")
                 df = pd.read_csv(
                     uploaded_file,
                     sep=None,
@@ -203,11 +219,54 @@ class CSVHandler:
                 )
                 logger.info("Successfully read CSV using last resort method")
                 return df
-
+                
             except Exception as e:
-                logger.error(f"All CSV reading methods failed. Last error: {str(e)}")
+                logger.error(f"All reading methods failed. Last error: {e}")
                 return None
-
+                
         except Exception as e:
-            logger.error(f"Error reading CSV: {str(e)}")
+            logger.error(f"Critical error in CSV reading: {e}")
             return None
+    
+    def validate_csv_structure(self, df: pd.DataFrame, required_columns: List[str]) -> Dict[str, Any]:
+        """
+        Validate CSV structure and content.
+        
+        Args:
+            df: DataFrame to validate
+            required_columns: List of required column names
+            
+        Returns:
+            Dictionary with validation results
+        """
+        validation_result = {
+            "valid": True,
+            "errors": [],
+            "warnings": [],
+            "stats": {
+                "total_rows": len(df),
+                "total_columns": len(df.columns),
+                "null_counts": df.isnull().sum().to_dict(),
+                "memory_usage": df.memory_usage(deep=True).sum()
+            }
+        }
+        
+        # Check required columns
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            validation_result["valid"] = False
+            validation_result["errors"].append(f"Missing required columns: {missing_columns}")
+        
+        # Check for empty DataFrame
+        if df.empty:
+            validation_result["valid"] = False
+            validation_result["errors"].append("DataFrame is empty")
+        
+        # Check for excessive null values
+        null_percentages = (df.isnull().sum() / len(df)) * 100
+        high_null_columns = null_percentages[null_percentages > 50].index.tolist()
+        if high_null_columns:
+            validation_result["warnings"].append(f"High null percentage in columns: {high_null_columns}")
+        
+        logger.info(f"CSV validation completed. Valid: {validation_result['valid']}")
+        return validation_result
