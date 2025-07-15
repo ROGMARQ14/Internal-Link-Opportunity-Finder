@@ -4,9 +4,10 @@ Link analyzer with bidirectional checking and quality assessment.
 
 import pandas as pd
 import logging
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple, Any
 from collections import defaultdict
 from config import DEFAULT_TOP_N
+from src.utils.url_normalizer import url_normalizer
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,7 @@ class LinkAnalyzer:
         self.quality_assessor = LinkQualityAssessment()
         self._validate_links_data()
         self._create_link_indices()
+        self._create_normalized_indices()
 
     def _validate_links_data(self):
         """Validate the links DataFrame structure."""
@@ -164,6 +166,36 @@ class LinkAnalyzer:
 
         logger.info("Created link indices for faster lookups")
 
+    def _create_normalized_indices(self):
+        """Create normalized URL indices for better matching."""
+        self.normalized_source_to_destinations = defaultdict(set)
+        self.normalized_destination_to_sources = defaultdict(set)
+        self.original_to_normalized = {}
+        self.normalized_to_originals = defaultdict(list)
+        
+        # Build normalized indices
+        for _, row in self.links_df.iterrows():
+            original_source = row['Source']
+            original_dest = row['Destination']
+            
+            # Normalize URLs
+            norm_source = url_normalizer.normalize(original_source)
+            norm_dest = url_normalizer.normalize(original_dest)
+            
+            if norm_source and norm_dest:
+                # Store mappings
+                self.original_to_normalized[original_source] = norm_source
+                self.original_to_normalized[original_dest] = norm_dest
+                
+                self.normalized_to_originals[norm_source].append(original_source)
+                self.normalized_to_originals[norm_dest].append(original_dest)
+                
+                # Build normalized indices
+                self.normalized_source_to_destinations[norm_source].add(norm_dest)
+                self.normalized_destination_to_sources[norm_dest].add(norm_source)
+        
+        logger.info(f"Created normalized indices with {len(self.normalized_to_originals)} unique normalized URLs")
+
     def check_link_exists_bidirectional(self, url1: str, url2: str) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Check if there's a link between two URLs in either direction.
@@ -176,20 +208,44 @@ class LinkAnalyzer:
             tuple: (exists, status, metadata)
         """
         try:
-            # Check both directions using indices
-            direction1_exists = url1 in self.source_to_destinations.get(url2, set())
-            direction2_exists = url2 in self.source_to_destinations.get(url1, set())
+            # Normalize URLs for consistent matching
+            norm_url1 = url_normalizer.normalize(url1)
+            norm_url2 = url_normalizer.normalize(url2)
+            
+            if not norm_url1 or not norm_url2:
+                return False, "Invalid URL", {'error': 'URL normalization failed'}
+            
+            # Check both directions using normalized indices
+            direction1_exists = norm_url1 in self.normalized_source_to_destinations.get(norm_url2, set())
+            direction2_exists = norm_url2 in self.normalized_source_to_destinations.get(norm_url1, set())
+            
+            # Also check original indices as fallback
+            orig_direction1 = url1 in self.source_to_destinations.get(url2, set())
+            orig_direction2 = url2 in self.source_to_destinations.get(url1, set())
+            
+            # Use normalized results, but log discrepancies
+            exists = direction1_exists or direction2_exists
+            original_exists = orig_direction1 or orig_direction2
+            
+            if exists != original_exists:
+                logger.debug(f"URL normalization affected result: {url1} <-> {url2}")
+                logger.debug(f"Normalized: {norm_url1} <-> {norm_url2}")
+                logger.debug(f"Normalized result: {exists}, Original result: {original_exists}")
 
             # Gather metadata
             metadata = {
                 'url1': url1,
                 'url2': url2,
+                'normalized_url1': norm_url1,
+                'normalized_url2': norm_url2,
                 'direction1_exists': direction1_exists,  # url2 -> url1
                 'direction2_exists': direction2_exists,  # url1 -> url2
-                'total_outlinks_url1': len(self.source_to_destinations.get(url1, set())),
-                'total_outlinks_url2': len(self.source_to_destinations.get(url2, set())),
-                'total_inlinks_url1': len(self.destination_to_sources.get(url1, set())),
-                'total_inlinks_url2': len(self.destination_to_sources.get(url2, set()))
+                'original_direction1_exists': orig_direction1,
+                'original_direction2_exists': orig_direction2,
+                'total_outlinks_url1': len(self.normalized_source_to_destinations.get(norm_url1, set())),
+                'total_outlinks_url2': len(self.normalized_source_to_destinations.get(norm_url2, set())),
+                'total_inlinks_url1': len(self.normalized_destination_to_sources.get(norm_url1, set())),
+                'total_inlinks_url2': len(self.normalized_destination_to_sources.get(norm_url2, set()))
             }
 
             # Determine status
